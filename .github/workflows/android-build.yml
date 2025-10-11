@@ -1,5 +1,5 @@
 name: Android Debug Build
-
+  
 on:
   workflow_dispatch:
   push:
@@ -14,8 +14,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # To preserve file permissions (e.g. gradlew +x)
 
       - name: Setup Gradle Cache
         uses: actions/cache@v3
@@ -31,11 +29,11 @@ jobs:
         run: |
           echo "Vérification de la structure du projet..."
           if [ ! -d "android" ]; then
-            echo "Le répertoire 'android' est manquant."
+            echo "Le répertoire 'android' est manquant. Assurez-vous que c'est un projet Android ou React Native."
             exit 1
           fi
           if [ ! -f "package.json" ]; then
-            echo "Le fichier 'package.json' est manquant."
+            echo "Le fichier 'package.json' est manquant. Assurez-vous que c'est un projet React Native."
             exit 1
           fi
           if [ ! -f "android/build.gradle" ]; then
@@ -47,11 +45,15 @@ jobs:
       - name: Vérifier et installer jq
         run: |
           if ! command -v jq &> /dev/null; then
+            echo "jq n'est pas installé, installation en cours..."
             sudo apt-get update && sudo apt-get install -y jq
+          else
+            echo "jq est déjà installé."
           fi
 
       - name: Install Android SDK (cmdline-tools)
         run: |
+          echo "Installation du SDK Android..."
           mkdir -p android-sdk/cmdline-tools
           wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O sdk.zip
           unzip sdk.zip -d tmp-sdk
@@ -90,35 +92,37 @@ jobs:
       - name: Install npm dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Clean npm and reinstall (optional recovery)
+      - name: Check node_modules content
+        run: ls -l node_modules/@react-native-community/cli-platform-android
+
+
+
+      - name: Clean npm and reinstall
         run: |
           rm -rf node_modules package-lock.json
           npm install --legacy-peer-deps
 
-      - name: Set up JDK 17
-        id: setup-java
+
+
+
+      - name: Set up JDK 11
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '11'
           cache: 'gradle'
-
-      - name: Vérifier version de Java et Gradle
-        run: |
-          echo "JAVA_HOME=$JAVA_HOME"
-          java -version
-          ./gradlew -version
-        working-directory: android
 
       - name: Ajouter compileSdkVersion si manquant
         run: |
           if ! grep -q "compileSdkVersion" android/build.gradle; then
+            echo "Ajout de compileSdkVersion = 33"
             sed -i '/ext {/a\        compileSdkVersion = 33' android/build.gradle
           fi
 
       - name: Générer un keystore de débogage
         run: |
-          if [ ! -f android/app/debug.keystore ]; then
+          if ! keytool -list -v -keystore android/app/debug.keystore -alias androiddebugkey -storepass android > /dev/null 2>&1; then
+            echo "Génération d'une nouvelle clé de débogage..."
             keytool -genkeypair \
               -v \
               -keystore android/app/debug.keystore \
@@ -130,6 +134,8 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US" \
               -deststoretype pkcs12
+          else
+            echo "La clé androiddebugkey existe déjà. Aucune action requise."
           fi
           keytool -list -v \
             -keystore android/app/debug.keystore \
@@ -137,13 +143,8 @@ jobs:
             -storepass android
 
       - name: Build Debug APK
-        run: |
-          echo "JAVA_HOME=$JAVA_HOME"
-          $JAVA_HOME/bin/java -version
-          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m" --no-daemon
+        run: ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m" --no-daemon
         working-directory: android
-        env:
-          JAVA_HOME: ${{ steps.setup-java.outputs.path }}
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
